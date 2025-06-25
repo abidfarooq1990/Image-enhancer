@@ -2,9 +2,6 @@ import streamlit as st
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 import io
-from scipy import ndimage
-from skimage import transform, restoration, filters
-import matplotlib.pyplot as plt
 
 # Set page config
 st.set_page_config(
@@ -63,124 +60,71 @@ class ImageEnhancer:
         return True, "Valid image file"
     
     def enhance_image(self, image, settings):
-        """Apply various enhancement techniques to the image"""
-        # Convert PIL to numpy array
-        img_array = np.array(image)
+        """Apply various enhancement techniques using only PIL"""
+        enhanced_image = image.copy()
         
-        # 1. Upscaling - using skimage instead of cv2
+        # 1. Upscaling using PIL
         if settings['scale_factor'] != 1.0:
-            img_array = self.upscale_image(img_array, settings['scale_factor'], settings['interpolation'])
+            enhanced_image = self.upscale_image(enhanced_image, settings['scale_factor'], settings['interpolation'])
         
-        # 2. Convert back to PIL for easier manipulation
-        enhanced_image = Image.fromarray(img_array.astype('uint8'))
-        
-        # 3. Apply brightness
+        # 2. Apply brightness
         if settings['brightness'] != 1.0:
             enhancer = ImageEnhance.Brightness(enhanced_image)
             enhanced_image = enhancer.enhance(settings['brightness'])
         
-        # 4. Apply contrast
+        # 3. Apply contrast
         if settings['contrast'] != 1.0:
             enhancer = ImageEnhance.Contrast(enhanced_image)
             enhanced_image = enhancer.enhance(settings['contrast'])
         
-        # 5. Apply saturation
+        # 4. Apply saturation
         if settings['saturation'] != 1.0:
             enhancer = ImageEnhance.Color(enhanced_image)
             enhanced_image = enhancer.enhance(settings['saturation'])
         
-        # 6. Apply sharpening
-        if settings['sharpness'] > 1.0:
-            enhanced_image = self.apply_sharpening(enhanced_image, settings['sharpness'])
+        # 5. Apply sharpening
+        if settings['sharpness'] != 1.0:
+            enhancer = ImageEnhance.Sharpness(enhanced_image)
+            enhanced_image = enhancer.enhance(settings['sharpness'])
         
-        # 7. Apply noise reduction
+        # 6. Apply noise reduction (using PIL filters)
         if settings['noise_reduction'] > 0:
             enhanced_image = self.apply_noise_reduction(enhanced_image, settings['noise_reduction'])
         
         return enhanced_image
     
-    def upscale_image(self, img_array, scale_factor, interpolation_method):
-        """Upscale image using scikit-image (no cv2)"""
-        # Map interpolation methods
+    def upscale_image(self, image, scale_factor, interpolation_method):
+        """Upscale image using PIL only"""
+        # Map interpolation methods to PIL constants
         interpolation_map = {
-            'Bicubic': 3,
-            'Bilinear': 1,
-            'Lanczos': 3,
-            'Nearest': 0
+            'Bicubic': Image.BICUBIC,
+            'Bilinear': Image.BILINEAR,
+            'Lanczos': Image.LANCZOS,
+            'Nearest': Image.NEAREST
         }
         
-        order = interpolation_map.get(interpolation_method, 3)
+        interpolation = interpolation_map.get(interpolation_method, Image.BICUBIC)
         
-        try:
-            # Use scikit-image for resizing
-            upscaled = transform.rescale(
-                img_array, 
-                scale_factor, 
-                order=order, 
-                preserve_range=True,
-                channel_axis=-1 if len(img_array.shape) == 3 else None,
-                anti_aliasing=True
-            )
-            return upscaled.astype('uint8')
-        except Exception:
-            # Fallback to simple PIL resize
-            pil_img = Image.fromarray(img_array.astype('uint8'))
-            new_size = (int(pil_img.width * scale_factor), int(pil_img.height * scale_factor))
-            resized = pil_img.resize(new_size, Image.BICUBIC)
-            return np.array(resized)
-    
-    def apply_sharpening(self, image, sharpness_factor):
-        """Apply unsharp masking for sharpening"""
-        img_array = np.array(image)
+        # Calculate new size
+        new_width = int(image.width * scale_factor)
+        new_height = int(image.height * scale_factor)
         
-        # Create gaussian blur
-        blurred = ndimage.gaussian_filter(img_array.astype(float), sigma=1.0)
-        
-        # Calculate unsharp mask
-        sharpened = img_array + (sharpness_factor - 1.0) * (img_array - blurred)
-        
-        # Clip values to valid range
-        sharpened = np.clip(sharpened, 0, 255)
-        
-        return Image.fromarray(sharpened.astype('uint8'))
+        return image.resize((new_width, new_height), interpolation)
     
     def apply_noise_reduction(self, image, noise_reduction_factor):
-        """Apply noise reduction using scipy and scikit-image (no cv2)"""
-        img_array = np.array(image)
-        
-        try:
-            if noise_reduction_factor <= 0.3:
-                # Light denoising - Gaussian blur
-                sigma = noise_reduction_factor * 2
-                denoised = ndimage.gaussian_filter(img_array.astype(float), sigma=sigma)
-            elif noise_reduction_factor <= 0.6:
-                # Medium denoising - Median filter
-                if len(img_array.shape) == 3:
-                    denoised = np.zeros_like(img_array)
-                    for i in range(img_array.shape[2]):
-                        denoised[:,:,i] = ndimage.median_filter(img_array[:,:,i], size=3)
-                else:
-                    denoised = ndimage.median_filter(img_array, size=3)
-            else:
-                # Heavy denoising - Total variation
-                if len(img_array.shape) == 3:
-                    denoised = np.zeros_like(img_array, dtype=float)
-                    for i in range(img_array.shape[2]):
-                        denoised[:,:,i] = restoration.denoise_tv_chambolle(
-                            img_array[:,:,i] / 255.0, weight=noise_reduction_factor * 0.1
-                        ) * 255
-                else:
-                    denoised = restoration.denoise_tv_chambolle(
-                        img_array / 255.0, weight=noise_reduction_factor * 0.1
-                    ) * 255
-                    
-            return Image.fromarray(np.clip(denoised, 0, 255).astype('uint8'))
-            
-        except Exception:
-            # Fallback to simple gaussian blur
-            sigma = noise_reduction_factor
-            denoised = ndimage.gaussian_filter(img_array.astype(float), sigma=sigma)
-            return Image.fromarray(np.clip(denoised, 0, 255).astype('uint8'))
+        """Apply noise reduction using PIL filters only"""
+        if noise_reduction_factor <= 0.3:
+            # Light smoothing
+            radius = noise_reduction_factor * 2
+            return image.filter(ImageFilter.GaussianBlur(radius=radius))
+        elif noise_reduction_factor <= 0.6:
+            # Medium smoothing
+            return image.filter(ImageFilter.SMOOTH_MORE)
+        else:
+            # Heavy smoothing
+            smoothed = image.filter(ImageFilter.SMOOTH_MORE)
+            radius = (noise_reduction_factor - 0.6) * 3
+            return smoothed.filter(ImageFilter.GaussianBlur(radius=radius))
     
     def get_image_stats(self, image):
         """Get image statistics"""
@@ -188,7 +132,7 @@ class ImageEnhancer:
         return {
             'width': image.width,
             'height': image.height,
-            'channels': len(img_array.shape),
+            'channels': len(img_array.shape) if len(img_array.shape) > 2 else 1,
             'mean_brightness': np.mean(img_array),
             'std_brightness': np.std(img_array),
             'file_size_mb': len(image.tobytes()) / (1024 * 1024)
@@ -200,13 +144,13 @@ def main():
     <div class="main-header">
         <h1>🎨 Image Quality Enhancer</h1>
         <p style="text-align: center; color: white; margin: 0;">
-            Real-time image enhancement - Cloud Optimized (No OpenCV)
+            Minimal Dependencies Version - Works on All Platforms!
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     # Success message
-    st.success("✅ **App Successfully Loaded!** - No more cv2 import errors!")
+    st.success("✅ **Minimal Version Loaded Successfully!** - Only using PIL + NumPy")
     
     # Initialize enhancer
     if 'enhancer' not in st.session_state:
@@ -223,11 +167,13 @@ def main():
     if uploaded_file is None:
         st.info("👆 Please upload an image file to get started!")
         st.markdown("""
-        ### 📋 Features:
-        - **Real-time preview**: See changes instantly as you adjust sliders
-        - **Multiple formats**: JPEG, PNG, TIFF support
-        - **Cloud-optimized**: No OpenCV dependency issues
-        - **Live statistics**: Monitor image metrics in real-time
+        ### 📋 Features (Minimal Version):
+        - **Real-time preview**: See changes instantly
+        - **Image upscaling**: 1x to 4x resolution increase
+        - **Basic enhancements**: Brightness, contrast, saturation, sharpness
+        - **Noise reduction**: Gaussian blur and smoothing filters
+        - **Download results**: Save your enhanced images
+        - **Zero dependency issues**: Uses only PIL and NumPy
         """)
         return
     
@@ -244,6 +190,7 @@ def main():
             original_image = original_image.convert('RGB')
         
         st.session_state.original_image = original_image
+        st.success(f"✅ Image loaded: {original_image.width}×{original_image.height} pixels")
     except Exception as e:
         st.error(f"❌ Error loading image: {str(e)}")
         return
@@ -266,8 +213,8 @@ def main():
         scale_factor = st.slider(
             "Scale Factor",
             min_value=1.0,
-            max_value=3.0,
-            value=1.5,
+            max_value=4.0,
+            value=2.0,
             step=0.1,
             help="Increase image resolution",
             key="scale_factor"
@@ -275,7 +222,7 @@ def main():
         
         interpolation_method = st.selectbox(
             "Interpolation Method",
-            ['Bicubic', 'Bilinear', 'Nearest'],
+            ['Bicubic', 'Bilinear', 'Lanczos', 'Nearest'],
             index=0,
             help="Algorithm used for upscaling",
             key="interpolation"
@@ -316,7 +263,7 @@ def main():
         sharpness = st.slider(
             "Sharpness",
             min_value=0.5,
-            max_value=2.5,
+            max_value=3.0,
             value=1.0,
             step=0.1,
             help="Enhance image sharpness",
@@ -328,16 +275,16 @@ def main():
         noise_reduction = st.slider(
             "Noise Reduction",
             min_value=0.0,
-            max_value=0.8,
+            max_value=1.0,
             value=0.0,
             step=0.1,
-            help="Reduce image noise",
+            help="Reduce image noise (using Gaussian blur)",
             key="noise_reduction"
         )
         
         # Reset button
         if st.button("🔄 Reset All Settings", type="secondary"):
-            st.session_state.scale_factor = 1.5
+            st.session_state.scale_factor = 2.0
             st.session_state.brightness = 1.0
             st.session_state.contrast = 1.0
             st.session_state.saturation = 1.0
@@ -372,14 +319,16 @@ def main():
                 with img_col1:
                     st.subheader("📷 Original")
                     st.image(original_image, use_container_width=True)
+                    st.caption(f"Size: {original_image.width}×{original_image.height}")
                 
                 with img_col2:
                     st.subheader("✨ Enhanced")
                     st.image(enhanced_image, use_container_width=True)
+                    st.caption(f"Size: {enhanced_image.width}×{enhanced_image.height}")
                 
                 # Download button
                 img_buffer = io.BytesIO()
-                enhanced_image.save(img_buffer, format='PNG')
+                enhanced_image.save(img_buffer, format='PNG', quality=95)
                 img_buffer.seek(0)
                 
                 st.download_button(
@@ -403,7 +352,7 @@ def main():
                     st.metric(
                         "🔍 Resolution",
                         f"{enhanced_stats['width']} × {enhanced_stats['height']}",
-                        f"{enhanced_stats['width'] - original_stats['width']} × {enhanced_stats['height'] - original_stats['height']}"
+                        f"+{enhanced_stats['width'] - original_stats['width']} × +{enhanced_stats['height'] - original_stats['height']}"
                     )
                 
                 with stat_col2:
@@ -420,13 +369,62 @@ def main():
                         f"{enhanced_stats['mean_brightness'] - original_stats['mean_brightness']:+.1f}"
                     )
                 
+                # Detailed comparison table
+                st.subheader("📋 Detailed Comparison")
+                comparison_data = {
+                    "Metric": ["Width", "Height", "Total Pixels", "File Size (MB)", "Mean Brightness"],
+                    "Original": [
+                        f"{original_stats['width']}px",
+                        f"{original_stats['height']}px", 
+                        f"{original_stats['width'] * original_stats['height']:,}",
+                        f"{original_stats['file_size_mb']:.2f}",
+                        f"{original_stats['mean_brightness']:.1f}"
+                    ],
+                    "Enhanced": [
+                        f"{enhanced_stats['width']}px",
+                        f"{enhanced_stats['height']}px",
+                        f"{enhanced_stats['width'] * enhanced_stats['height']:,}",
+                        f"{enhanced_stats['file_size_mb']:.2f}",
+                        f"{enhanced_stats['mean_brightness']:.1f}"
+                    ]
+                }
+                
+                st.table(comparison_data)
+                
                 # Enhancement summary
                 resolution_increase = (enhanced_stats['width'] * enhanced_stats['height']) / (original_stats['width'] * original_stats['height'])
-                st.success(f"🎉 **Enhancement Summary**: {resolution_increase:.1f}x resolution increase!")
+                st.success(f"🎉 **Enhancement Complete**: {resolution_increase:.1f}x total pixel increase!")
         
         except Exception as e:
             st.error(f"❌ Enhancement failed: {str(e)}")
             st.info("💡 Try adjusting the settings or uploading a different image")
+            st.write("Debug info:", str(e))
+
+    # Info section
+    with st.expander("ℹ️ About This Minimal Version"):
+        st.markdown("""
+        ### 🔧 Technical Details:
+        - **Dependencies**: Only PIL (Pillow) and NumPy
+        - **Upscaling**: PIL's built-in interpolation algorithms
+        - **Enhancements**: PIL's ImageEnhance module
+        - **Noise Reduction**: Gaussian blur and smoothing filters
+        - **Compatibility**: Works on all Streamlit Cloud deployments
+        
+        ### 🎯 Features Available:
+        - ✅ **Image upscaling** with multiple interpolation methods
+        - ✅ **Brightness and contrast** adjustment
+        - ✅ **Color saturation** control
+        - ✅ **Sharpness enhancement**
+        - ✅ **Basic noise reduction**
+        - ✅ **Real-time preview**
+        - ✅ **Download enhanced images**
+        - ✅ **Live statistics**
+        
+        ### 💡 Why This Version Works:
+        This version uses only the most basic, well-supported libraries that are 
+        guaranteed to be available on Streamlit Cloud, avoiding complex dependencies
+        that can cause import errors.
+        """)
 
 if __name__ == "__main__":
     main()
